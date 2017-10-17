@@ -20,17 +20,32 @@ func NewResult() Result {
 }
 
 type result struct {
-	mu  sync.Mutex
-	C   chan struct{}
-	val interface{}
+	once sync.Once
+	C    chan struct{}
+	mu   sync.Mutex
+	val  interface{}
+	err  error
+}
+
+func (r *result) closeCh() {
+	r.once.Do(func() {
+		close(r.C)
+	})
 }
 
 func (r *result) Set(val interface{}) {
-	r.mu.Lock()
-	r.val = val
-	r.mu.Unlock()
-
-	close(r.C)
+	if err, ok := val.(error); ok {
+		r.mu.Lock()
+		r.val = nil
+		r.err = err
+		r.mu.Unlock()
+	} else {
+		r.mu.Lock()
+		r.val = val
+		r.err = nil
+		r.mu.Unlock()
+	}
+	r.closeCh()
 }
 
 func (r *result) Done() <-chan struct{} {
@@ -55,27 +70,18 @@ func (r *result) Value() (val interface{}, err error) {
 	<-r.C
 
 	r.mu.Lock()
-	err, ok := r.val.(error)
+	val, err = r.val, r.err
 	r.mu.Unlock()
 
-	if ok {
-		return nil, err
-	}
-
-	val = r.val
-	return val, nil
+	return val, err
 }
 
 func (r *result) Err() (err error) {
 	<-r.C
 
 	r.mu.Lock()
-	err, ok := r.val.(error)
+	err = r.err
 	r.mu.Unlock()
 
-	if ok {
-		return err
-	}
-
-	return nil
+	return err
 }
